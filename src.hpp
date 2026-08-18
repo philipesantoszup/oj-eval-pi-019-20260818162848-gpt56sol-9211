@@ -60,9 +60,9 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
     gpu_sim.ReleaseMatrix(query);
 
     // Sum/MatDiv are scalar-reduction operations, so normalize one row at a
-    // time.  Multiplying each normalized row immediately also avoids keeping
-    // both the complete probability matrix and the answer in SRAM.
-    Matrix *answer = nullptr;
+    // time.  Joining the small probability rows before one final MatMul keeps
+    // two growing, d-wide answer matrices from coexisting during Concat.
+    Matrix *probabilities = nullptr;
     for (size_t row = 0; row <= i; ++row) {
       Matrix *weights = matrix_memory_allocator.Allocate(
           "exp_row_" + std::to_string(i) + "_" + std::to_string(row));
@@ -70,29 +70,30 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
           "denominator_" + std::to_string(i) + "_" + std::to_string(row));
       Matrix *normalized = matrix_memory_allocator.Allocate(
           "normalized_" + std::to_string(i) + "_" + std::to_string(row));
-      Matrix *output_row = matrix_memory_allocator.Allocate(
-          "output_row_" + std::to_string(i) + "_" + std::to_string(row));
 
       gpu_sim.GetRow(exponentials, row, weights, kInSharedMemory);
       gpu_sim.Sum(weights, denominator);
       gpu_sim.MatDiv(weights, denominator, normalized);
-      gpu_sim.MatMul(normalized, value_rows, output_row);
       gpu_sim.ReleaseMatrix(weights);
       gpu_sim.ReleaseMatrix(denominator);
-      gpu_sim.ReleaseMatrix(normalized);
 
       if (row == 0) {
-        answer = output_row;
+        probabilities = normalized;
       } else {
         Matrix *joined = matrix_memory_allocator.Allocate(
-            "answer_" + std::to_string(i) + "_" + std::to_string(row));
-        gpu_sim.Concat(answer, output_row, joined, 0, kInSharedMemory);
-        gpu_sim.ReleaseMatrix(answer);
-        gpu_sim.ReleaseMatrix(output_row);
-        answer = joined;
+            "probabilities_" + std::to_string(i) + "_" +
+            std::to_string(row));
+        gpu_sim.Concat(probabilities, normalized, joined, 0, kInSharedMemory);
+        gpu_sim.ReleaseMatrix(probabilities);
+        gpu_sim.ReleaseMatrix(normalized);
+        probabilities = joined;
       }
     }
     gpu_sim.ReleaseMatrix(exponentials);
+    Matrix *answer =
+        matrix_memory_allocator.Allocate("answer_" + std::to_string(i));
+    gpu_sim.MatMul(probabilities, value_rows, answer);
+    gpu_sim.ReleaseMatrix(probabilities);
     gpu_sim.MoveMatrixToGpuHbm(answer);
 
     gpu_sim.Run(false, &matrix_memory_allocator);
