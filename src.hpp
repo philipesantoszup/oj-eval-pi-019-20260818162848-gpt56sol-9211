@@ -55,9 +55,9 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
     Matrix *exponentials =
         matrix_memory_allocator.Allocate("exponentials_" + std::to_string(i));
     gpu_sim.MatMul(query, key_columns, scores);
+    gpu_sim.ReleaseMatrix(query);
     gpu_sim.MatExp(scores, exponentials);
     gpu_sim.ReleaseMatrix(scores);
-    gpu_sim.ReleaseMatrix(query);
 
     // Sum/MatDiv are scalar-reduction operations, so normalize one row at a
     // time.  Joining the small probability rows before one final MatMul keeps
